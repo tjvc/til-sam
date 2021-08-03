@@ -1,0 +1,115 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  til-sam
+
+Transform:
+  - AWS::Serverless-2016-10-31
+
+Resources:
+  Api:
+    # I tried using HttpApi, which supports a simpler authorizer response format, but I couldn't get CORS working
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: dev
+      Auth:
+        DefaultAuthorizer: Authorizer
+        # TODO: Confirm we need this (see: https://github.com/aws/serverless-application-model/issues/717)
+        AddDefaultAuthorizerToCorsPreflight: false
+        Authorizers:
+          Authorizer:
+            FunctionArn: !GetAtt authorizeFunction.Arn
+      # > it works only if inline OpenApi is defined with DefinitionBody
+      # https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-api.html#sam-api-cors
+      # This still seems to required and have an effect, however
+      Cors:
+        # https://blog.ilearnaws.com/2020/05/27/error-unable-to-put-integration-response-on-options-for-resource-at-path/
+        AllowHeaders: "'Authorization'"
+        AllowOrigin: "'*'"
+
+  authorizeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/handlers/authorize.handler
+      Runtime: nodejs14.x
+
+  postTweetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/handlers/postTweet.handler
+      Runtime: nodejs14.x
+      MemorySize: 128
+      Timeout: 100
+      Policies:
+        DynamoDBCrudPolicy:
+          TableName: Tweets
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref Api
+            Path: /tweets
+            Method: POST
+
+  getTweetsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/handlers/getTweets.handler
+      Runtime: nodejs14.x
+      MemorySize: 128
+      Timeout: 100
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: Tweets
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref Api
+            Path: /tweets
+            Method: GET
+
+  deleteTweetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/handlers/deleteTweet.handler
+      Runtime: nodejs14.x
+      MemorySize: 128
+      Timeout: 100
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: Tweets
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref Api
+            Path: /tweets
+            Method: DELETE
+
+  tweetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: nodejs14.x
+      Handler: src/handlers/tweet.handler
+      Policies:
+        DynamoDBCrudPolicy:
+          TableName: Tweets
+      Events:
+        CloudWatchEvent:
+          Type: Schedule
+          Properties:
+            Schedule: cron(0 17 ? * MON-FRI *)
+      MemorySize: 128
+      Timeout: 100
+
+  TweetsTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      TableName: Tweets
+      PrimaryKey:
+        Name: ID
+        Type: Number
+
+Outputs:
+  ApiEndpoint:
+    Value: !Sub "https://${Api}.execute-api.${AWS::Region}.amazonaws.com/dev/"
